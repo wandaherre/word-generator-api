@@ -1,6 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "functions": { "api/generate.js": { "includeFiles": "api/template.docx" } },
+  "functions": {
+    "api/generate.js": {
+      "includeFiles": "api/template.docx"
+    }
+  },
   "headers": [
     {
       "source": "/api/(.*)",

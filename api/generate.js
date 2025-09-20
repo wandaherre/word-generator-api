@@ -1,33 +1,57 @@
 // api/generate.js
+// Runtime: Vercel Node.js Serverless Function (CommonJS)
+// Erwartet: vercel.json mit includeFiles: "api/template.docx"
+// Abhängigkeit: "docx-templates" in package.json
+
 const fs = require("fs");
 const path = require("path");
-const createReport = require("docx-templates"); // <- docx-templates (single braces)
+const createReport = require("docx-templates");
 
 module.exports = async (req, res) => {
-  // CORS (auch Preflight)
+  // --- CORS ---
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
-  if (req.method === "OPTIONS") { res.status(200).end(); return; }
+  res.setHeader("Cache-Control", "no-store");
 
-  if (req.method !== "POST") { res.status(405).end(); return; }
+  if (req.method === "OPTIONS") {
+    res.status(200).end();
+    return;
+  }
+
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method Not Allowed" });
+    return;
+  }
 
   try {
-    const templatePath = path.join(__dirname, "template.docx"); // dank includeFiles vorhanden
-    const template = fs.readFileSync(templatePath);
+    // JSON-Body (AI Studio sendet application/json)
+    const payload = req.body && typeof req.body === "object" ? req.body : {};
 
-    const buffer = await createReport({
-      template,
-      data: req.body || {},
-      cmdDelimiter: ["{", "}"] // explizit: single braces
+    // Template aus dem gebundleten Pfad lesen (dank includeFiles vorhanden)
+    const templatePath = path.join(__dirname, "template.docx");
+    const templateBuffer = fs.readFileSync(templatePath);
+
+    // DOCX generieren – docx-templates nutzt SINGLE BRACES {key}
+    const docBuffer = await createReport({
+      template: templateBuffer,
+      data: payload,
+      cmdDelimiter: ["{", "}"]
     });
 
-    res.setHeader("Content-Type",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-    res.setHeader("Content-Disposition", "attachment; filename=generated.docx");
-    res.status(200).send(Buffer.from(buffer)); // nur Binary, kein extra Text!
+    // Binary-Response (kein JSON/kein Text!)
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    );
+    res.setHeader("Content-Disposition", 'attachment; filename="generated.docx"');
+
+    // WICHTIG: Nur Buffer senden
+    res.status(200).send(Buffer.from(docBuffer));
   } catch (err) {
-    // Fehler als JSON (kein 200er mit HTML-Body!)
-    res.status(500).json({ error: String(err && err.message || err) });
+    // Fehler klar als JSON zurückgeben (kein 200er mit HTML)
+    res
+      .status(500)
+      .json({ error: err && err.message ? err.message : String(err) });
   }
 };

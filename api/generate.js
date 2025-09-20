@@ -15,18 +15,27 @@ module.exports = async (req, res) => {
   }
 
   try {
-    // Check if docx-templates can be imported
+    // Test docx-templates import
     const { createReport } = require('docx-templates');
+    
+    // Check template file
+    const templatePath = path.resolve(__dirname, 'template.docx');
+    const templateExists = fs.existsSync(templatePath);
+    
+    if (!templateExists) {
+      return res.status(404).json({
+        error: 'Template not found',
+        path: templatePath
+      });
+    }
     
     return res.status(200).json({
       success: true,
       message: 'docx-templates loaded successfully',
-      hasTemplate: fs.existsSync(path.resolve(__dirname, 'template.docx'))
+      templateExists: true,
+      templatePath: templatePath
     });
+    
   } catch (error) {
     return res.status(500).json({
-      error: 'docx-templates failed to load',
-      details: error.message
-    });
-  }
-};
+      error: 'docx-templates

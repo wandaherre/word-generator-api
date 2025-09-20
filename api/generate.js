@@ -23,35 +23,47 @@ module.exports = async (req, res) => {
     }
 
     const template = fs.readFileSync(templatePath);
-    
-    // Use simple test data if no body provided
-    const data = Object.keys(req.body || {}).length === 0 ? {
-      title: 'Test Document',
-      content: 'This is generated content.'
-    } : req.body;
+    console.log('Template loaded, size:', template.length);
 
-    console.log('Generating document with data:', JSON.stringify(data, null, 2));
+    // Force minimal data
+    const data = {
+      title: 'Hardcoded Title',
+      content: 'Hardcoded Content'
+    };
+
+    console.log('Using hardcoded data:', data);
 
     const buffer = await createReport({
       template,
       data,
-      cmdDelimiter: ['{{', '}}']
+      cmdDelimiter: ['{{', '}}'],
+      literalXmlDelimiter: ['||', '||'],
+      processLineBreaks: false,
+      noSandBox: true
     });
 
-    console.log('Document generated successfully, size:', buffer.length);
+    console.log('Document generated, size:', buffer.length);
+
+    // Validate the buffer is not empty
+    if (!buffer || buffer.length === 0) {
+      throw new Error('Generated buffer is empty');
+    }
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    res.setHeader('Content-Disposition', 'attachment; filename=generated.docx');
+    res.setHeader('Content-Disposition', 'attachment; filename=forced-minimal.docx');
     
     return res.status(200).send(buffer);
 
   } catch (error) {
-    console.error('Generation error:', error.message);
+    console.error('DETAILED ERROR:');
+    console.error('Type:', error.constructor.name);
+    console.error('Message:', error.message);
     console.error('Stack:', error.stack);
     
     return res.status(500).json({
-      error: 'Document generation failed',
-      details: error.message
+      error: 'Generation failed',
+      type: error.constructor.name,
+      message: error.message
     });
   }
 };

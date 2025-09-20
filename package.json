@@ -1,5 +1,18 @@
 {
-  "name": "word-generator",
+  "name": "vercel-docx-generator",
   "version": "1.0.0",
-  "dependencies": {}
+  "description": "Serverless DOCX-Generator auf Vercel mit docx-templates",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "echo \"No build step needed\"",
+    "start": "node api/generate.js"
+  },
+  "dependencies": {
+    "docx-templates": "^4.14.1"
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  }
 }

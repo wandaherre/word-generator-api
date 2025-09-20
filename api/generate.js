@@ -1,50 +1,55 @@
 // api/generate.js
-// Vercel Node.js Serverless Function (CommonJS) + docx-templates
-// Ziele:
-// - CORS + OPTIONS
-// - Robust: Body-Parsing, Defaults für optionale Variablen, Normalisierung von Arrays/Objekten zu String
-// - DOCX-Binary zurückgeben (korrekter MIME-Type), kein JSON-Wrapper
-// - Fehler -> JSON
-
 const fs = require("fs");
 const path = require("path");
-// WICHTIG: Default-Export der Library korrekt holen
 const createReport = require("docx-templates").default;
 
 module.exports = async (req, res) => {
-  // --- CORS / Cache ---
+  // --- CORS ---
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
   res.setHeader("Cache-Control", "no-store");
 
   // Preflight
-  if (req.method === "OPTIONS") { res.status(200).end(); return; }
+  if (req.method === "OPTIONS") {
+    res.status(200).end();
+    return;
+  }
 
+  // Nur POST zulassen
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method Not Allowed" });
     return;
   }
 
   try {
-    // --- Body robust einlesen ---
+    // Body robust lesen (AI Studio sendet application/json)
     let payload = req.body;
     if (typeof payload === "string") {
       try { payload = JSON.parse(payload); } catch { payload = {}; }
     }
     if (!payload || typeof payload !== "object") payload = {};
 
-    // --- Hilfsfunktionen ---
+    // ---- Defaults für optionale Variablen (verhindert ReferenceError) ----
     const ensure = (k, v = "") => { if (typeof payload[k] === "undefined") payload[k] = v; };
+    ensure("midjourney_article_logo", "");
+    ensure("teacher_cloud_logo", "");
 
-    // Arrays/Objekte in Strings verwandeln, damit keine "[object Object]" im DOCX landen
+    // Headline-Sprachvarianten angleichen
+    if (typeof payload.headline_article === "string" && !payload.headline_artikel) {
+      payload.headline_artikel = payload.headline_article;
+    }
+    if (typeof payload.headline_artikel === "string" && !payload.headline_article) {
+      payload.headline_article = payload.headline_artikel;
+    }
+
+    // ---- Arrays/Objekte zu String normalisieren (verhindert "[object Object]") ----
     const toText = (v) => {
       if (v == null) return "";
       if (Array.isArray(v)) {
         return v.map(x => {
           if (x == null) return "";
           if (typeof x === "object") {
-            // häufige Felder, sonst JSON für Debug
             const t = x.text ?? x.sentence ?? x.value ?? x.title ?? null;
             return t != null ? String(t) : JSON.stringify(x);
           }
@@ -58,20 +63,6 @@ module.exports = async (req, res) => {
       return String(v);
     };
 
-    // --- Defaults für kritische, optionale Variablen (verhindert ReferenceError bei INS) ---
-    ensure("midjourney_article_logo", "");
-    ensure("teacher_cloud_logo", "");
-    // Doppelte Headline-Varianten im Template absichern
-    // (falls nur eine Seite liefert, bleibt die andere nicht undefined)
-    if (typeof payload.headline_article === "string" && !payload.headline_artikel) {
-      payload.headline_artikel = payload.headline_article;
-    }
-    if (typeof payload.headline_artikel === "string" && !payload.headline_article) {
-      payload.headline_article = payload.headline_artikel;
-    }
-
-    // --- Bekannte Textfelder in Strings normalisieren ---
-    // Alles zu Text mappen, was typischerweise Rich-Content sein kann:
     const normalizeKeys = (obj) => {
       for (const k of Object.keys(obj)) {
         if (
@@ -92,24 +83,20 @@ module.exports = async (req, res) => {
     };
     normalizeKeys(payload);
 
-    // --- Template laden (muss via vercel.json includeFiles gebundled sein) ---
+    // ---- Template laden (liegt dank includeFiles garantiert daneben) ----
     const templatePath = path.join(__dirname, "template.docx");
     const templateBuffer = fs.readFileSync(templatePath);
 
-    // --- DOCX generieren ---
+    // ---- DOCX generieren (docx-templates nutzt SINGLE BRACES {key}) ----
     const docBuffer = await createReport({
       template: templateBuffer,
       data: payload,
       cmdDelimiter: ["{", "}"],
-      // Defensive Options:
-      rejectNullish: false,  // null/undefined führt nicht zum Abbruch
-      errorHandler: (e) => {
-        // Fallback: leere Einfügung statt Abbruch – Logik kann bei Bedarf verschärft werden
-        return "";
-      }
+      rejectNullish: false, // null/undefined nicht als Fehler werten
+      errorHandler: () => "" // im Zweifel leeren String einfügen statt Abbruch
     });
 
-    // --- Korrekte Binary-Antwort ---
+    // ---- Nur den DOCX-Binärstream senden (korrekter MIME) ----
     res.setHeader(
       "Content-Type",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -117,6 +104,7 @@ module.exports = async (req, res) => {
     res.setHeader("Content-Disposition", 'attachment; filename="generated.docx"');
     res.status(200).send(Buffer.from(docBuffer));
   } catch (err) {
+    // Nur hier JSON – in allen Erfolgsfällen nie JSON verwenden
     res.status(500).json({ error: err && err.message ? err.message : String(err) });
   }
 };

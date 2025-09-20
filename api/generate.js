@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { createReport } = require('docx-templates');
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -15,27 +16,42 @@ module.exports = async (req, res) => {
   }
 
   try {
-    // Test docx-templates import
-    const { createReport } = require('docx-templates');
-    
-    // Check template file
     const templatePath = path.resolve(__dirname, 'template.docx');
-    const templateExists = fs.existsSync(templatePath);
     
-    if (!templateExists) {
-      return res.status(404).json({
-        error: 'Template not found',
-        path: templatePath
-      });
+    if (!fs.existsSync(templatePath)) {
+      return res.status(404).json({ error: 'Template not found' });
     }
+
+    const template = fs.readFileSync(templatePath);
     
-    return res.status(200).json({
-      success: true,
-      message: 'docx-templates loaded successfully',
-      templateExists: true,
-      templatePath: templatePath
+    // Use simple test data if no body provided
+    const data = Object.keys(req.body || {}).length === 0 ? {
+      title: 'Test Document',
+      content: 'This is generated content.'
+    } : req.body;
+
+    console.log('Generating document with data:', JSON.stringify(data, null, 2));
+
+    const buffer = await createReport({
+      template,
+      data,
+      cmdDelimiter: ['{{', '}}']
     });
+
+    console.log('Document generated successfully, size:', buffer.length);
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', 'attachment; filename=generated.docx');
     
+    return res.status(200).send(buffer);
+
   } catch (error) {
+    console.error('Generation error:', error.message);
+    console.error('Stack:', error.stack);
+    
     return res.status(500).json({
-      error: 'docx-templates
+      error: 'Document generation failed',
+      details: error.message
+    });
+  }
+};

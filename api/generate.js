@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { createReport } = require('docx-templates');
+const { put } = require('@vercel/blob');
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -17,17 +18,9 @@ module.exports = async (req, res) => {
 
   try {
     const templatePath = path.resolve(__dirname, 'template.docx');
-    
-    if (!fs.existsSync(templatePath)) {
-      return res.status(404).json({ error: 'Template not found' });
-    }
-
     const template = fs.readFileSync(templatePath);
     
-    const data = Object.keys(req.body || {}).length === 0 ? {
-      title: 'Test Document',
-      content: 'This is test content.'
-    } : req.body;
+    const data = req.body || { title: 'Test', content: 'Test content' };
 
     const buffer = await createReport({
       template,
@@ -35,22 +28,24 @@ module.exports = async (req, res) => {
       cmdDelimiter: ['{{', '}}']
     });
 
-    console.log('Generated buffer size:', buffer.length);
+    // Upload to Vercel Blob Storage
+    const filename = `document-${Date.now()}.docx`;
+    const blob = await put(filename, buffer, {
+      access: 'public',
+      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    });
 
-    // Set proper headers for binary download
-    res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Disposition', 'attachment; filename=generated.docx');
-    res.setHeader('Content-Length', buffer.length.toString());
-    res.setHeader('Transfer-Encoding', 'chunked');
-    
-    // Send buffer directly
-    res.status(200);
-    res.end(buffer, 'binary');
+    return res.status(200).json({
+      success: true,
+      downloadUrl: blob.url,
+      filename: filename,
+      size: buffer.length
+    });
 
   } catch (error) {
-    console.error('Generation error:', error.message);
+    console.error('Error:', error.message);
     return res.status(500).json({
-      error: 'Document generation failed',
+      error: 'Generation failed',
       details: error.message
     });
   }

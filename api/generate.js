@@ -37,15 +37,15 @@ module.exports = async (req, res) => {
 
     console.log('Generated buffer size:', buffer.length);
 
-    // Convert to base64 and send as JSON
-    const base64 = buffer.toString('base64');
+    // Set proper headers for binary download
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', 'attachment; filename=generated.docx');
+    res.setHeader('Content-Length', buffer.length.toString());
+    res.setHeader('Transfer-Encoding', 'chunked');
     
-    return res.status(200).json({
-      success: true,
-      document: base64,
-      filename: 'generated.docx',
-      size: buffer.length
-    });
+    // Send buffer directly
+    res.status(200);
+    res.end(buffer, 'binary');
 
   } catch (error) {
     console.error('Generation error:', error.message);

@@ -1,13 +1,6 @@
 // api/generate.js
-// DOCX via docx-templates. Liefert *_rich als Literal-XML (||...||) und erzeugt:
-// - Artikel gesamt: article_text_all_rich (optional)
-// - Konditionssichere *_content_rich (Absätze, Bullet/Nummern, Abstand)
-// - Unterstriche: Grammar=13, Idioms=20, komplette Satzlinie breit
-// - MC-Labels a) b) c) bei Idioms
-// - Wortboxen: *_word_box_content_line (mit exakt "   |   ") + *_rich
-// - Vokabel je Absatz: *_line + *_rich
-// - Abitur wird NICHT gefiltert
-// - CORS dynamisch, Preflight ok
+// DOCX via docx-templates. Fügt *_rich als Literal-XML (||...||) ein.
+// WICHTIG: Zeilentrenner ist jetzt EIN <w:br/> (kein doppelter), damit keine neuen Bullets entstehen.
 
 const fs = require("fs");
 const path = require("path");
@@ -59,23 +52,30 @@ function splitRuns(md){
   }
   return out;
 }
-function runXml({t,b,i}){const pr=(b||i)?`<w:rPr>${b?"<w:b/>":""}${i?"<w:i/>":""}</w:rPr>`:"";return `<w:r>${pr}<w:t xml:space="preserve">${escText(t)}</w:t></w:r>`;}
-function linesToRunsXml(lines){const parts=[];lines.forEach((ln,idx)=>{splitRuns(ln).forEach(r=>parts.push(runXml(r))); if(idx<lines.length-1) parts.push("<w:br/><w:br/>");}); return parts.join("");} // doppeltes <w:br/> = mehr Abstand
+function runXml({t,b,i}) {
+  const pr=(b||i)?`<w:rPr>${b?"<w:b/>":""}${i?"<w:i/>":""}</w:rPr>`:"";
+  return `<w:r>${pr}<w:t xml:space="preserve">${escText(t)}</w:t></w:r>`;
+}
+// EIN <w:br/> zwischen Zeilen (kein doppelter!)
+function linesToRunsXml(lines){
+  const parts=[];
+  lines.forEach((ln,idx)=>{
+    splitRuns(ln).forEach(r=>parts.push(runXml(r)));
+    if(idx<lines.length-1) parts.push("<w:br/>");
+  });
+  return parts.join("");
+}
 function toLiteral(runsXml){ return `||${runsXml}||`; }
 
 /* ---------- Helpers: Unterstriche, Nummerierung, MC-Labels ---------- */
 function repeatChar(ch,n){return new Array(n+1).join(ch);}
 function widenGaps(line, underscoreLen){
-  // Ersetze „___“ durch längere Linien, belasse vorhandene 5+ Unterstriche
   return line.replace(/_{3}(?=\b)/g, repeatChar("_", underscoreLen));
 }
 function sentenceUnderline(line){
-  // Für „ganzer Satz hinschreiben“: Linie über (fast) ganze Zeile
-  // Heuristik: Placeholder „___SENTENCE___“ → ersetze
   return line.replace(/___SENTENCE___/g, repeatChar("_", 80));
 }
 function autoEnumerate(lines){
-  // Nummeriere 1.,2.,3. wenn keine Bullets/Nummern vorhanden
   const hasMarkers = lines.some(s => /^\s*([0-9]+\.)|[-•]\s+/.test(s));
   if (hasMarkers) return lines;
   return lines.map((s,i)=>`${i+1}. ${s}`);
@@ -89,7 +89,6 @@ function labelChoicesABC(lines){
 const MAX_P=16;
 
 function deriveArticle(payload){
-  // Einzelabsätze (für bedingte Darstellung)
   for(let i=1;i<=MAX_P;i++){
     const k=`article_text_paragraph${i}`;
     if(k in payload){
@@ -106,7 +105,6 @@ function deriveArticle(payload){
       payload[`article_vocab_p${i}_rich`] = toLiteral(linesToRunsXml(words));
     }
   }
-  // Gesamtartikel (optional)
   const paras=[];
   for(let i=1;i<=MAX_P;i++){
     const k=`article_text_paragraph${i}`;
@@ -136,20 +134,21 @@ function deriveExercises(payload){
       const val = htmlToLightMd(payload[k]);
       let lines = val.split(/\n/);
 
-      // Unterstriche anpassen je Bereich
       const isIdioms = /idioms/i.test(k);
       const isGrammar = /b1_|b2_|grammar/i.test(k) && !isIdioms;
+
+      // marker
       lines = lines.map(s => sentenceUnderline(s));
       lines = lines.map(s => widenGaps(s, isIdioms ? 20 : (isGrammar ? 13 : 13)));
 
-      // MC-Labels bei Idioms, wenn es wie Optionen aussieht
+      // Idioms: Multiple-choice Labels a) b) c)
       if (isIdioms) {
         const looksLikeOptions = lines.length>=3 && lines.every(x=>x.trim().length>0);
         if (looksLikeOptions) lines = labelChoicesABC(lines);
+      } else {
+        // Sonst nummerieren, falls keine Marker
+        lines = autoEnumerate(lines);
       }
-
-      // Nummerierung, wenn keine Marker vorhanden und nicht MC
-      if (!isIdioms) lines = autoEnumerate(lines);
 
       payload[`${k}_rich`] = toLiteral(linesToRunsXml(lines));
     }
@@ -172,7 +171,6 @@ module.exports = async (req, res) => {
     if (typeof payload === "string"){ try{ payload=JSON.parse(payload);}catch{ payload={}; } }
     if (!payload || typeof payload !== "object") payload = {};
 
-    // harmlose Defaults
     if (typeof payload.midjourney_article_logo === "undefined") payload.midjourney_article_logo = "";
     if (typeof payload.teacher_cloud_logo === "undefined") payload.teacher_cloud_logo = "";
     if (payload.headline_article && !payload.headline_artikel) payload.headline_artikel = payload.headline_article;

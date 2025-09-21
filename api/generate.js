@@ -1,9 +1,7 @@
 // api/generate.js
-// DOCX via docx-templates. Fügt *_rich als Literal-XML (||...||) ein.
-// Wichtig: KEIN pauschaler <w:br/> nach jeder Zeile mehr.
-// - Blank-Zeilen -> genau ein <w:br/>
-// - Zwischen zwei Textzeilen -> genau ein <w:br/>
-// - Am Ende -> kein zusätzlicher <w:br/>
+// DOCX via docx-templates. Liefert *_rich als Literal-XML (||...||).
+// Blank-Page-Fix: Mehrere Leerzeilen -> max. 1; keine führenden/abschließenden Leerzeilen;
+// kein überflüssiger <w:br/> am Blockende.
 
 const fs = require("fs");
 const path = require("path");
@@ -55,7 +53,7 @@ function htmlToLightMd(input, { forActive = false } = {}) {
     s = s.replace(/(?:^|\n)\s*(Phase\s*\d+\s*:)/gi, (m, g1) => `\n\n**${g1.trim()}**\n`);
   }
 
-  // Mehrfache Leerzeilen reduzieren
+  // Mehrfache Leerzeilen zunächst auf max. 2 reduzieren (Feinbegrenzung kommt später)
   s = s.replace(/\n{3,}/g, "\n\n").trim();
 
   return s;
@@ -82,18 +80,39 @@ function runXml({t,b,i}) {
   return `<w:r>${pr}<w:t xml:space="preserve">${escText(t)}</w:t></w:r>`;
 }
 
-/* ---------- Rendering ohne pauschalen Separator ---------- */
+/* ---------- Items & Rendering (Blank-Page-Fix) ---------- */
 // items = Array aus { kind:'text', line:'...' } oder { kind:'blank' }
+function collapseBlankItems(items){
+  const out=[];
+  let prevBlank=false;
+
+  for (const it of items){
+    if (it.kind === "blank"){
+      if (!prevBlank) { out.push(it); prevBlank = true; }
+      // weitere blanks droppen
+    } else {
+      out.push(it);
+      prevBlank = false;
+    }
+  }
+  // führende/abschließende blanks entfernen
+  while (out[0] && out[0].kind === "blank") out.shift();
+  while (out[out.length-1] && out[out.length-1].kind === "blank") out.pop();
+
+  return out;
+}
+
+// Kein pauschaler Separator: nur <w:br/> zwischen zwei Textzeilen und für explizite Leerzeilen
 function itemsToRunsXml(items){
+  const collapsed = collapseBlankItems(items);
   const parts=[];
-  for (let idx=0; idx<items.length; idx++){
-    const it = items[idx];
-    const next = items[idx+1];
+  for (let idx=0; idx<collapsed.length; idx++){
+    const it = collapsed[idx];
+    const next = collapsed[idx+1];
 
     if (it.kind === "blank") {
       // explizite Leerzeile: genau EIN <w:br/>
       parts.push("<w:br/>");
-      // KEIN zusätzlicher Separator hier
       continue;
     }
 
@@ -104,7 +123,7 @@ function itemsToRunsXml(items){
     if (next && next.kind === "text") {
       parts.push("<w:br/>");
     }
-    // Wenn next blank ist, übernimmt der blank selbst den <w:br/>, also hier keinen hinzufügen.
+    // Wenn next blank ist, übernimmt der blank selbst den <w:br/>, hier nichts.
   }
   return parts.join("");
 }
@@ -117,30 +136,30 @@ function sentenceUnderline(line){ return line.replace(/___SENTENCE___/g, repeatC
 
 // Nummeriere NUR nicht-leere Zeilen; leere bleiben Leerzeilen (ohne Nummer)
 function enumeratePreserveBlanks(lines){
-  const out=[]; let n=0;
+  const items=[]; let n=0;
   for (const raw of lines) {
     const s = String(raw);
-    if (s.trim().length === 0) { out.push({ kind: "blank" }); continue; }
-    if (/^\s*([0-9]+\.)|[-•]\s+/.test(s)) { out.push({ kind: "text", line: s }); continue; }
+    if (s.trim().length === 0) { items.push({ kind: "blank" }); continue; }
+    if (/^\s*([0-9]+\.)|[-•]\s+/.test(s)) { items.push({ kind: "text", line: s }); continue; }
     n += 1;
-    out.push({ kind: "text", line: `${n}. ${s}` });
+    items.push({ kind: "text", line: `${n}. ${s}` });
   }
-  return out;
+  return items;
 }
 
 // MC: a) b) c); leere Zeilen bleiben Leerzeilen (ohne Label)
 function choicesABC(lines){
   const labels="abcdefghijklmnopqrstuvwxyz".split("");
-  const out=[];
+  const items=[];
   let i=0;
   for (const raw of lines) {
     const s=String(raw);
-    if (s.trim().length===0) { out.push({ kind: "blank" }); continue; }
+    if (s.trim().length===0) { items.push({ kind: "blank" }); continue; }
     const label = labels[i] || String.fromCharCode(97+i);
-    out.push({ kind: "text", line: `${label}) ${s.replace(/^\s*[-•]\s+/, "")}` });
+    items.push({ kind:"text", line: `${label}) ${s.replace(/^\s*[-•]\s+/, "")}` });
     i++;
   }
-  return out;
+  return items;
 }
 
 /* ---------- Ableitungen ---------- */
@@ -184,13 +203,13 @@ function deriveExercises(payload){
     // Wortboxen
     if(/_word_box_content$/i.test(k)){
       let raw=(payload[k]||"").toString().trim(); if(!raw) continue;
-      let items;
-      if(raw.includes("|")) items=raw.split("|");
-      else if(raw.includes("\n")) items=raw.split("\n");
-      else items=raw.split(",");
-      items=items.map(s => s.trim()).filter(Boolean);
-      payload[`${k}_line`] = items.join("   |   ");
-      const it = items.map(s => ({kind:"text", line:s}));
+      let itemsArr;
+      if(raw.includes("|")) itemsArr=raw.split("|");
+      else if(raw.includes("\n")) itemsArr=raw.split("\n");
+      else itemsArr=raw.split(",");
+      itemsArr=itemsArr.map(s => s.trim()).filter(Boolean);
+      payload[`${k}_line`] = itemsArr.join("   |   ");
+      const it = itemsArr.map(s => ({kind:"text", line:s}));
       payload[`${k}_rich`] = toLiteral(itemsToRunsXml(it));
     }
 

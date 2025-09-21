@@ -1,7 +1,15 @@
 // api/generate.js
 // DOCX via docx-templates. Fügt *_rich als Literal-XML (||...||) ein.
-// Fixes: Links, Active-Absätze/De-Duplicate, Unterstrich-Normalisierung, Table->Text (Idioms),
-// Label-Stripping vor MC a) b) c), keine extra BR am Blockende, Blank-Page-Fix (max. 1 Leerzeile).
+//
+// Dies behebt:
+// - Links: _pretty zeigt NUR "source"/"help" (keine ausgeschriebene URL).
+// - Idioms-Wortbox: *_word_box_content -> *_word_box_content_line (mit "   |   ").
+// - Active/Coop: robustere Absatzbildung (HTML + satzbasiert + "Phase X:").
+// - Tabellen (z. B. Idioms): <table> -> Pipes.
+//
+// WICHTIG: Klickbare Hyperlinks (unterlegtes "help") erfordern RawXML+Rels.
+//         Diese Datei liefert "help"/"source" als reinen Text. Sag Bescheid,
+//         falls du die Hyperlink-Variante willst.
 
 const fs = require("fs");
 const path = require("path");
@@ -21,66 +29,69 @@ function setCors(req, res) {
   res.setHeader("Cache-Control", "no-store");
 }
 
-/* ---------- HTML (inkl. Tabellen) -> „leichtes Markdown“ ---------- */
+/* ---------- HTML inkl. Tabellen -> leichtes Markdown ---------- */
 function normalizeTables(html) {
   if (html == null) return "";
   let s = String(html);
-  // Tabellen grob in „Zeilen | Spalten“ überführen
+  // Tabellen grob: Zeilen -> \n, Zellen -> " | "
   s = s.replace(/<tr[^>]*>/gi, "");
   s = s.replace(/<\/tr>/gi, "\n");
   s = s.replace(/<t[hd][^>]*>/gi, "");
   s = s.replace(/<\/t[hd]>/gi, " | ");
-  // Mehrere Pipes zusammenfassen, führende/trailing Pipen später getrimmt
-  s = s.replace(/\s*\|\s*(\|\s*)+/g, " | ");
+  s = s.replace(/\s*\|\s*(\|\s*)+/g, " | "); // multiple | reduzieren
   return s;
 }
 
 function htmlToLightMd(input, { forActive = false } = {}) {
   if (input == null) return "";
-  // 1) Tabellen zuerst in Pipes
   let s = normalizeTables(input);
 
-  // 2) Zeilen/Absätze
+  // Standard-Blockelemente
   s = s.replace(/<br\s*\/?>/gi, "\n");
   s = s.replace(/<\/p>\s*/gi, "\n\n").replace(/<p[^>]*>/gi, "");
   s = s.replace(/<\/div>\s*/gi, "\n\n").replace(/<div[^>]*>/gi, "");
 
-  // 3) Headings als Absatz + fett
+  // Headings als Fett + Absatz
   s = s.replace(/<\/h[1-6]>\s*/gi, "\n\n")
        .replace(/<h[1-6][^>]*>/gi, "**")
        .replace(/<\/h[1-6]>/gi, "**");
 
-  // 4) Listen
+  // Listen
   s = s.replace(/<li[^>]*>\s*/gi, "- ").replace(/<\/li>/gi, "\n");
   s = s.replace(/<\/?(ul|ol)[^>]*>/gi, "");
 
-  // 5) Bold/Kursiv
+  // Inline-Format
   s = s.replace(/<\/?strong>/gi, "**").replace(/<\/?b>/gi, "**");
   s = s.replace(/<\/?em>/gi, "*").replace(/<\/?i>/gi, "*");
 
-  // 6) Restliche Tags raus
+  // Rest-Tags entfernen
   s = s.replace(/<[^>]+>/g, "");
 
-  // 7) Windows-Zeilenenden
+  // Zeilenenden normalisieren
   s = s.replace(/\r\n?/g, "\n");
 
-  // 8) Active-Phasen deutlicher absetzen
+  // Active: zusätzliche Heuristiken für Absätze
   if (forActive) {
+    // "Phase X:" deutlich absetzen
     s = s.replace(/(?:^|\n)\s*(Phase\s*\d+\s*:)/gi, (m, g1) => `\n\n**${g1.trim()}**\n`);
-    // Falls alles in einer Zeile: splitte vor "1. ", "2. ", "• ", "- " usw.
+    // Satzbasierte Aufteilung, wenn kaum \n vorhanden
+    if (!/\n{2,}/.test(s)) {
+      s = s.replace(/(?<=[.!?])\s+(?=[A-ZÄÖÜ])/g, "\n\n");
+    }
+    // Nummerierte Listen in neue Zeilen zwingen
     s = s.replace(/(\s)(\d+\.\s+)/g, "$1\n$2");
   }
 
-  // 9) Pipe-Kosmetik (am Zeilenende)
+  // Pipes ans Zeilenende säubern
   s = s.split("\n").map(line => line.replace(/\s*\|\s*$/,"").trimEnd()).join("\n");
 
-  // 10) Mehrfache Leerzeilen grob auf max. 2 reduzieren (Feinbegrenzung kommt später)
+  // Grob Mehrfach-Blankzeilen reduzieren
   s = s.replace(/\n{3,}/g, "\n\n").trim();
 
   return s;
 }
 
-/* ---------- Markdown Runs -> Literal XML (||...||) ---------- */
+/* ---------- Markdown Runs -> Literal XML ---------- */
 function escText(t){return String(t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
 function splitRuns(md){
   const out=[]; let rest=String(md);
@@ -101,22 +112,19 @@ function runXml({t,b,i}) {
   return `<w:r>${pr}<w:t xml:space="preserve">${escText(t)}</w:t></w:r>`;
 }
 
-/* ---------- Items & Rendering (kein Extra-BR am Blockende) ---------- */
-// items = Array aus { kind:'text', line:'...' } oder { kind:'blank' }
+/* ---------- Items/Rendering (kein Extra-BR am Blockende) ---------- */
+// items: { kind:'text', line:'...' } | { kind:'blank' }
 function collapseBlankItems(items){
   const out=[]; let prevBlank=false;
   for (const it of items){
     if (it.kind === "blank"){
       if (!prevBlank) { out.push(it); prevBlank = true; }
-    } else {
-      out.push(it); prevBlank = false;
-    }
+    } else { out.push(it); prevBlank = false; }
   }
   while (out[0] && out[0].kind === "blank") out.shift();
   while (out[out.length-1] && out[out.length-1].kind === "blank") out.pop();
   return out;
 }
-
 function itemsToRunsXml(items){
   const collapsed = collapseBlankItems(items);
   const parts=[];
@@ -131,21 +139,21 @@ function itemsToRunsXml(items){
 }
 function toLiteral(runsXml){ return `||${runsXml}||`; }
 
-/* ---------- Helpers: Unterstriche, Labels, Nummerierung ---------- */
+/* ---------- Helpers: Unterstriche/Labels/Nummerierung ---------- */
 function repeatChar(ch,n){return new Array(n+1).join(ch);}
 
-// Normalisiert JEDE Sequenz von >=3 "_" auf gewünschte Länge
+// Alle Sequenzen >=3 "_" auf Ziel-Länge normalisieren
 function normalizeUnderscores(line, desiredLen){
   return String(line).replace(/_{3,}/g, repeatChar("_", desiredLen));
 }
 function sentenceUnderline(line){ return String(line).replace(/___SENTENCE___/g, repeatChar("_", 80)); }
 
-// Entfernt führende Labels/Nummern: "A.", "B)", "1.", "a)" etc.
+// Optionen reinigen (A., A), 1., - , • )
 function stripLeadingLabels(line){
-  return String(line).replace(/^\s*([A-Za-z]\)|[A-Za-z]\.|[0-9]+\.)\s+/, "");
+  return String(line).replace(/^\s*((?:[A-Za-z][\)\.]|[0-9]+\.)\s+|[-•]\s+)/, "");
 }
 
-// Nummeriere NUR nicht-leere Zeilen; leere bleiben Leerzeilen
+// Nummerieren – nur nicht-leere Zeilen
 function enumeratePreserveBlanks(lines){
   const items=[]; let n=0;
   for (const raw of lines) {
@@ -157,7 +165,7 @@ function enumeratePreserveBlanks(lines){
   return items;
 }
 
-// MC: a) b) c); entfernt vorhandene führende Label
+// MC a) b) c) – vorhandene Labels vorher entfernen
 function choicesABC(lines){
   const labels="abcdefghijklmnopqrstuvwxyz".split("");
   const items=[]; let i=0;
@@ -166,24 +174,24 @@ function choicesABC(lines){
     if (s.trim().length===0) { items.push({ kind: "blank" }); continue; }
     s = stripLeadingLabels(s);
     const label = labels[i] || String.fromCharCode(97+i);
-    items.push({ kind:"text", line: `${label}) ${s.replace(/^\s*[-•]\s+/, "")}` });
+    items.push({ kind:"text", line: `${label}) ${s}` });
     i++;
   }
   return items;
 }
 
-/* ---------- Ableitungen ---------- */
+/* ---------- Artikel/Idioms/Active ableiten ---------- */
 const MAX_P=16;
 
 function deriveArticle(payload){
-  if (payload.source_link) payload.source_link_pretty = `source (${payload.source_link})`;
+  // "source" ohne ausgeschriebene URL
+  if (payload.source_link) payload.source_link_pretty = "source";
 
   for(let i=1;i<=MAX_P;i++){
     const k=`article_text_paragraph${i}`;
     if(k in payload){
       const md = htmlToLightMd(payload[k]);
-      const lines = md.split(/\n/);
-      const items = lines.map(s => s.trim().length ? {kind:"text", line:s} : {kind:"blank"});
+      const items = md.split(/\n/).map(s => s.trim().length ? {kind:"text", line:s} : {kind:"blank"});
       payload[`${k}_rich`] = toLiteral(itemsToRunsXml(items));
     }
     const w1=(payload[`article_vocab_p${i}_1`]||"").toString().trim();
@@ -210,16 +218,16 @@ function deriveArticle(payload){
 
 function deriveExercises(payload){
   for(const k of Object.keys(payload)){
-    // Wortboxen
+    // Wortboxen -> *_line
     if(/_word_box_content$/i.test(k)){
       let raw=(payload[k]||"").toString().trim(); if(!raw) continue;
-      let itemsArr;
-      if(raw.includes("|")) itemsArr=raw.split("|");
-      else if(raw.includes("\n")) itemsArr=raw.split("\n");
-      else itemsArr=raw.split(",");
-      itemsArr=itemsArr.map(s => s.trim()).filter(Boolean);
-      payload[`${k}_line`] = itemsArr.join("   |   ");
-      const it = itemsArr.map(s => ({kind:"text", line:s}));
+      let items;
+      if(raw.includes("|")) items=raw.split("|");
+      else if(raw.includes("\n")) items=raw.split("\n");
+      else items=raw.split(",");
+      items=items.map(s => s.trim()).filter(Boolean);
+      payload[`${k}_line`] = items.join("   |   ");
+      const it = items.map(s => ({kind:"text", line:s}));
       payload[`${k}_rich`] = toLiteral(itemsToRunsXml(it));
     }
 
@@ -229,27 +237,15 @@ function deriveExercises(payload){
       const isIdioms = /idioms/i.test(k);
       const isGrammar = /b1_|b2_|grammar/i.test(k) && !isIdioms;
 
-      // HTML->Text (Active spezieller)
       let md = htmlToLightMd(payload[k], { forActive: isActive });
-
-      // Heuristik: Explanation = Content? -> bei Active: Explanation nicht duplizieren
-      if (isActive) {
-        const exKey = k.replace(/_content$/i, "_explanation");
-        if (payload[exKey] && String(payload[exKey]).trim() === String(payload[k]).trim()) {
-          // Explanation bleibt kurz: nur erster Satz
-          const firstSentence = String(payload[exKey]).split(/(?<=[.!?])\s+/)[0] || "";
-          payload[exKey] = firstSentence;
-        }
-      }
 
       // Zeilen splitten
       let lines = md.split(/\n/).map(s => s.replace(/\s*\|\s*/g, "   |   ").trimEnd());
 
-      // Unterstriche/Linien normalisieren
+      // Unterstrich-Längen & spezielle Linien
       lines = lines.map(s => sentenceUnderline(s));
       lines = lines.map(s => normalizeUnderscores(s, isIdioms ? 20 : (isGrammar ? 13 : 13)));
 
-      // MC-Labels oder Nummerierung
       let items;
       if (isIdioms) {
         items = choicesABC(lines);
@@ -262,10 +258,10 @@ function deriveExercises(payload){
       payload[`${k}_rich`] = toLiteral(itemsToRunsXml(items));
     }
 
-    // Help-Links (sichtbarer Text)
+    // Help-Links -> NUR "help"
     if(/^help_link_/i.test(k)){
       const url=(payload[k]||"").toString().trim();
-      payload[`${k}_pretty`] = url ? `help (${url})` : "";
+      payload[`${k}_pretty`] = url ? "help" : "";
     }
   }
 }
@@ -286,7 +282,9 @@ module.exports = async (req, res) => {
     if (typeof payload.teacher_cloud_logo === "undefined") payload.teacher_cloud_logo = "";
     if (payload.headline_article && !payload.headline_artikel) payload.headline_artikel = payload.headline_article;
     if (payload.headline_artikel && !payload.headline_article) payload.headline_article = payload.headline_artikel;
-    if (payload.source_link && !payload.source_link_pretty) payload.source_link_pretty = `source (${payload.source_link})`;
+
+    // Links: nur Labels
+    if (payload.source_link && !payload.source_link_pretty) payload.source_link_pretty = "source";
 
     deriveArticle(payload);
     deriveExercises(payload);

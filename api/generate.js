@@ -1,6 +1,16 @@
 // api/generate.js
-// DOCX via docx-templates. Liefert *_rich (Literal-XML) und zusätzlich *_plain,
-// damit du auch ohne RAW-Template keine **-Artefakte siehst.
+// DOCX via docx-templates. Liefert *_rich als Literal-XML (||...||) UND
+// zusätzlich *_plain ohne **/HTML, sodass dein Template – egal ob RAW oder nicht –
+// ein brauchbares Ergebnis bekommt.
+//
+// Behebt u. a.:
+// - Active/Coop: Absätze & Fett (bei RAW), andernfalls Plain ohne **
+// - Idioms (MC): blockweise a)–d) je Frage (1., 2., …), keine globalen a..t
+// - Matching: 2-Spalten → "left   |   right"
+// - Wortbox: *_word_box_content_line wird aus vielen Alias-Feldern erzeugt
+// - Help: *_pretty = "help" für ALLE Varianten (1 / 1a / 1b / 2 …)
+// - Source: Label aus URL (Forbes/CFR/…)
+// - Gaps: nur ___SENTENCE___ → 80x "_" (kein globales U-Längen-Gebastel)
 
 const fs = require("fs");
 const path = require("path");
@@ -20,130 +30,133 @@ function setCors(req, res) {
   res.setHeader("Cache-Control", "no-store");
 }
 
-/* ---------------- Utilities ---------------- */
+/* ---------------- Helpers ---------------- */
 function escText(t){return String(t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
-function stripInlineStars(s){ return String(s).replace(/\*\*(.+?)\*\*/g, "$1").replace(/\*([^*]+)\*/g, "$1"); }
+function stripInlineStars(s){ return String(s).replace(/\*\*(.+?)\*\*/g,"$1").replace(/\*([^*]+)\*/g,"$1"); }
+function stripHtmlEntities(s){
+  return String(s)
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#160;/g, " ");
+}
 function sentenceUnderline(line){ return String(line).replace(/___SENTENCE___/g, "_".repeat(80)); }
 
 function hostToLabel(url) {
   try {
     const u = new URL(String(url));
-    const host = u.hostname.replace(/^www\./, "");
+    const host = u.hostname.replace(/^www\./,"");
     const map = {
-      "cfr.org": "CFR",
-      "forbes.com": "Forbes",
-      "theguardian.com": "The Guardian",
-      "nytimes.com": "The New York Times",
-      "bbc.com": "BBC",
-      "economist.com": "The Economist",
-      "ft.com": "Financial Times",
-      "wsj.com": "WSJ",
-      "reuters.com": "Reuters",
-      "apnews.com": "AP",
-      "bloomberg.com": "Bloomberg",
+      "cfr.org":"CFR","forbes.com":"Forbes","theguardian.com":"The Guardian",
+      "nytimes.com":"The New York Times","bbc.com":"BBC","economist.com":"The Economist",
+      "ft.com":"Financial Times","wsj.com":"WSJ","reuters.com":"Reuters",
+      "apnews.com":"AP","bloomberg.com":"Bloomberg"
     };
     if (map[host]) return map[host];
     const base = host.split(".")[0];
-    return base.charAt(0).toUpperCase() + base.slice(1);
+    return base ? base[0].toUpperCase()+base.slice(1) : "source";
   } catch { return "source"; }
 }
 
 /* ---------------- HTML → light-md ---------------- */
-function normalizeTables(html) {
+function normalizeTables(html){
   if (html == null) return "";
   let s = String(html);
-  // TR/TD → Zeilen & Pipes
-  s = s.replace(/<tr[^>]*>/gi, "");
-  s = s.replace(/<\/tr>/gi, "\n");
-  s = s.replace(/<t[hd][^>]*>/gi, "");
-  s = s.replace(/<\/t[hd]>/gi, " | ");
-  s = s.replace(/\s*\|\s*(\|\s*)+/g, " | ");
+  s = s.replace(/<tr[^>]*>/gi,"");
+  s = s.replace(/<\/tr>/gi,"\n");
+  s = s.replace(/<t[hd][^>]*>/gi,"");
+  s = s.replace(/<\/t[hd]>/gi," | ");
+  s = s.replace(/\s*\|\s*(\|\s*)+/g," | ");
   return s;
 }
-
-function htmlToLightMd(input, { forActive=false } = {}) {
+function htmlToLightMd(input,{forActive=false}={}){
   if (input == null) return "";
   let s = normalizeTables(input);
 
-  // Absatz/Zeilen
-  s = s.replace(/<br\s*\/?>/gi, "\n");
-  // Headings → **…** auf eigene Zeile (verhindert hängende **)
-  s = s.replace(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/gi, (_, g1) => `\n\n**${g1.trim()}**\n\n`);
-  s = s.replace(/<\/p>\s*/gi, "\n\n").replace(/<p[^>]*>/gi, "");
-  s = s.replace(/<\/div>\s*/gi, "\n\n").replace(/<div[^>]*>/gi, "");
+  // Headings → eigene Zeilen mit **…**
+  s = s.replace(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/gi, (_,g1)=>`\n\n**${g1.trim()}**\n\n`);
+
+  // Absätze / Zeilen
+  s = s.replace(/<br\s*\/?>/gi,"\n");
+  s = s.replace(/<\/p>\s*/gi,"\n\n").replace(/<p[^>]*>/gi,"");
+  s = s.replace(/<\/div>\s*/gi,"\n\n").replace(/<div[^>]*>/gi,"");
 
   // Listen
-  s = s.replace(/<li[^>]*>\s*/gi, "- ").replace(/<\/li>/gi, "\n");
-  s = s.replace(/<\/?(ul|ol)[^>]*>/gi, "");
+  s = s.replace(/<li[^>]*>\s*/gi,"- ").replace(/<\/li>/gi,"\n");
+  s = s.replace(/<\/?(ul|ol)[^>]*>/gi,"");
 
-  // inline bold/italic
-  s = s.replace(/<\/?strong>/gi, "**").replace(/<\/?b>/gi, "**");
-  s = s.replace(/<\/?em>/gi, "*").replace(/<\/?i>/gi, "*");
+  // inline bold/italic → Markdown
+  s = s.replace(/<\/?strong>/gi,"**").replace(/<\/?b>/gi,"**");
+  s = s.replace(/<\/?em>/gi,"*").replace(/<\/?i>/gi,"*");
 
-  // Reste
-  s = s.replace(/<[^>]+>/g, "");
-  s = s.replace(/\r\n?/g, "\n");
+  // Rest-Tags killen
+  s = s.replace(/<[^>]+>/g,"");
+  s = stripHtmlEntities(s).replace(/\r\n?/g,"\n");
 
-  if (forActive) {
-    s = s.replace(/(?:^|\n)\s*(Phase\s*\d+\s*:)/gi, (m,g1)=> `\n\n**${g1.trim()}**\n`);
-    if (!/\n{2,}/.test(s)) s = s.replace(/(?<=[.!?])\s+(?=[A-ZÄÖÜ])/g, "\n\n");
-    s = s.replace(/(\s)(\d+\.\s+)/g, "$1\n$2");
+  if (forActive){
+    // „Phase X:“ deutlich absetzen
+    s = s.replace(/(?:^|\n)\s*(Phase\s*\d+\s*:)/gi,(m,g1)=>`\n\n**${g1.trim()}**\n`);
+    // Falls kaum \n existieren: satzbasiert splitten
+    if (!/\n{2,}/.test(s)) s = s.replace(/(?<=[.!?])\s+(?=[A-ZÄÖÜ])/g,"\n\n");
+    // 1. 2. 3. in neue Zeile
+    s = s.replace(/(\s)(\d+\.\s+)/g,"$1\n$2");
   }
-  // Pipes am Ende säubern
-  s = s.split("\n").map(line => line.replace(/\s*\|\s*$/,"").trimEnd()).join("\n");
-  // Mehrfach-Blankzeilen normalisieren
-  s = s.replace(/\n{3,}/g, "\n\n").trim();
+
+  // Pipes am Ende säubern + Mehrfach-Blankzeilen reduzieren
+  s = s.split("\n").map(l=>l.replace(/\s*\|\s*$/,"").trimRight()).join("\n");
+  s = s.replace(/\n{3,}/g,"\n\n").trim();
   return s;
 }
 
-/* ---------------- Markdown → runs ---------------- */
+/* ---------------- Markdown → Runs (für *_rich) ---------------- */
 function splitRuns(md){
   const out=[]; let rest=String(md);
   const re=/(\*\*[^*]+\*\*|\*[^*]+\*)/;
   while(rest.length){
     const m=rest.match(re);
-    if(!m){out.push({t:rest}); break;}
+    if(!m){ out.push({t:rest}); break; }
     const [match]=m; const i=m.index;
     if(i>0) out.push({t:rest.slice(0,i)});
     if(match.startsWith("**")) out.push({t:match.slice(2,-2),b:true});
     else out.push({t:match.slice(1,-1),i:true});
-    rest=rest.slice(i+match.length);
+    rest = rest.slice(i+match.length);
   }
   return out;
 }
-function runXml({t,b,i}) {
-  const pr=(b||i)?`<w:rPr>${b?"<w:b/>":""}${i?"<w:i/>":""}</w:rPr>`:"";
+function runXml({t,b,i}){
+  const pr = (b||i)?`<w:rPr>${b?"<w:b/>":""}${i?"<w:i/>":""}</w:rPr>`:"";
   return `<w:r>${pr}<w:t xml:space="preserve">${escText(t)}</w:t></w:r>`;
 }
 
-/* ---------------- items → xml ---------------- */
-function collapseBlankItems(items){
-  const out=[]; let prev=false;
+/* ---------------- items → <w:r>… ---------------- */
+function collapseBlanks(items){
+  const out=[]; let prevBlank=false;
   for (const it of items){
-    if (it.kind==="blank"){ if(!prev){out.push(it); prev=true;} }
-    else { out.push(it); prev=false; }
+    if (it.kind==="blank"){ if(!prevBlank){out.push(it); prevBlank=true;} }
+    else { out.push(it); prevBlank=false; }
   }
   while (out[0]?.kind==="blank") out.shift();
   while (out[out.length-1]?.kind==="blank") out.pop();
   return out;
 }
 function itemsToRunsXml(items){
-  const collapsed = collapseBlankItems(items);
+  const collapsed = collapseBlanks(items);
   const parts=[];
   for (let i=0;i<collapsed.length;i++){
-    const it = collapsed[i], next = collapsed[i+1];
+    const it=collapsed[i], next=collapsed[i+1];
     if (it.kind==="blank"){ parts.push("<w:br/>"); continue; }
-    splitRuns(it.line).forEach(r => parts.push(runXml(r)));
+    splitRuns(it.line).forEach(r=>parts.push(runXml(r)));
     if (next && next.kind==="text") parts.push("<w:br/>");
   }
   return parts.join("");
 }
 const toLiteral = xml => `||${xml}||`;
 
-/* ---------------- helpers: lists & parsing ---------------- */
+/* ---------------- Listen/Parsing ---------------- */
 function stripLeadingLabels(line){
   // A. / A) / 1. / - / •
-  return String(line).replace(/^\s*((?:[A-Za-z][\)\.]|[0-9]+\.)\s+|[-•]\s+)/, "");
+  return String(line).replace(/^\s*((?:[A-Za-z][\)\.]|[0-9]+\.)\s+|[-•]\s+)/,"");
 }
 function enumeratePreserveBlanks(lines){
   const items=[]; let n=0;
@@ -151,7 +164,7 @@ function enumeratePreserveBlanks(lines){
     const s = String(raw);
     if (!s.trim()){ items.push({kind:"blank"}); continue; }
     if (/^\s*([0-9]+\.)|[-•]\s+/.test(s)){ items.push({kind:"text", line:s}); continue; }
-    n+=1; items.push({kind:"text", line:`${n}. ${s}`});
+    n += 1; items.push({kind:"text", line:`${n}. ${s}`});
   }
   return items;
 }
@@ -164,91 +177,91 @@ function toArrayFlexible(v){
   return s.split(",").map(t=>t.trim()).filter(Boolean);
 }
 
-/* ----- Idioms: blockweise MC (1. Frage + 4 Optionen, Labels pro Block neu) ----- */
-function buildIdiomsBlocks(md) {
-  // md → lines
-  const rawLines = md.split(/\n/).map(l => l.trimRight());
-  const blocks = [];
-  let cur = null;
-  let optIndex = 0;
-  const labels = "abcd".split("");
+/* ----- Idioms: blockweise MC (1. → neuer Block; a)–d) je Block) ----- */
+function buildIdiomsBlocks(md){
+  const rawLines = md.split(/\n/).map(l=>l.trimRight());
+  const blocks=[]; let cur=null; let optIdx=0; const labels="abcd".split("");
 
-  for (const L of rawLines) {
+  for (const L of rawLines){
     const line = sentenceUnderline(L).trim();
-    if (!line){ // Blank
-      if (cur) cur.items.push({ kind:"blank" });
-      continue;
-    }
-    const numQ = line.match(/^\d+\./);
-    if (numQ){
-      // neue Frage
+    if (!line){ if(cur) cur.items.push({kind:"blank"}); continue; }
+    if (/^\d+\./.test(line)){ // neue Frage
       if (cur) blocks.push(cur);
       cur = { question: line, items: [] };
-      optIndex = 0;
+      optIdx = 0;
       continue;
     }
-    // Option: führende Labels weg, dann a) b) c) d) neu vergeben
     const clean = stripLeadingLabels(line);
-    const label = labels[Math.min(optIndex, labels.length-1)];
-    const opt = `${label}) ${clean}`;
-    optIndex++;
-    if (!cur){
-      // Fallback: keine Frage erkannt, als Text pushen
-      blocks.push({ question: "", items: [{kind:"text", line: opt}] });
-    } else {
-      cur.items.push({ kind:"text", line: opt });
-    }
+    const lab = labels[Math.min(optIdx, labels.length-1)];
+    const opt = `${lab}) ${clean}`;
+    optIdx++;
+    if (!cur) blocks.push({ question:"", items:[{kind:"text", line:opt}] });
+    else cur.items.push({kind:"text", line:opt});
   }
   if (cur) blocks.push(cur);
 
-  // flatten zu items (Fragezeile + Optionen, mit Leerzeile dazwischen)
-  const items = [];
+  const items=[];
   for (const b of blocks){
-    if (b.question) items.push({ kind:"text", line: b.question });
-    for (const it of b.items) items.push(it);
-    items.push({ kind:"blank" }); // Abstand zwischen Blocks
+    if (b.question) items.push({kind:"text", line:b.question});
+    b.items.forEach(it=>items.push(it));
+    items.push({kind:"blank"});
   }
   return items;
 }
 
-/* ----- Matching: versuche 2-Spalten zu erkennen → "left   |   right" ----- */
-function buildMatchingLines(md) {
-  const lines = md.split(/\n/).map(s => s.trim()).filter(s => s.length);
-  // Heuristik: zwei Sequenzen (1..n) und (A..D) o.ä.
-  const left = [], right = [];
+/* ----- Matching: 1..n + A..D → "left   |   right" ----- */
+function buildMatchingLines(md){
+  const lines = md.split(/\n/).map(s=>s.trim()).filter(Boolean);
+  const left=[], right=[];
   for (const s of lines){
-    if (/^\d+\./.test(s)) left.push(s.replace(/^\d+\.\s*/, ""));
-    else if (/^[A-Za-z]\./.test(s)) right.push(s.replace(/^[A-Za-z]\.\s*/, ""));
-    else if (s.includes("|")) { // schon pipes
+    if (/^\d+\./.test(s)) left.push(s.replace(/^\d+\.\s*/,""));
+    else if (/^[A-Za-z]\./.test(s)) right.push(s.replace(/^[A-Za-z]\.\s*/,""));
+    else if (s.includes("|")) {
       const [a,b] = s.split("|");
-      left.push(a.trim()); right.push((b||"").trim());
+      left.push((a||"").trim()); right.push((b||"").trim());
     } else {
-      // unklassifizierbar → als frei Text zurückgeben
-      return lines.map(t => ({kind:"text", line: t}));
+      // nicht erkennbar → als Text zurückgeben
+      return lines.map(t=>({kind:"text", line:t}));
     }
   }
-  const n = Math.max(left.length, right.length);
-  const out = [];
+  const n = Math.max(left.length,right.length);
+  const out=[];
   for (let i=0;i<n;i++){
-    const L = left[i] || "";
-    const R = right[i] || "";
-    out.push({ kind:"text", line: `${L}   |   ${R}` });
+    out.push({kind:"text", line:`${left[i]||""}   |   ${right[i]||""}`});
   }
   return out;
 }
 
-/* ---------------- Article / Vocab ---------------- */
+/* ---------------- Wortbox Harvest ---------------- */
+function harvestWordBox(payload, base){
+  const candidates = [
+    payload[`${base}_word_box_content`],
+    payload[`${base}_word_box`],
+    payload[`${base}_wordbox`],
+    payload[`${base}_options`],
+    payload[`${base}_choices`],
+    payload[`${base}_words`],
+  ];
+  for (const c of candidates){
+    const a = toArrayFlexible(c);
+    if (a.length) return a;
+  }
+  return [];
+}
+
+/* ---------------- Article & Vocab ---------------- */
 const MAX_P=16;
 
 function deriveArticle(payload){
   if (payload.source_link) payload.source_link_pretty = hostToLabel(payload.source_link);
 
   for (let i=1;i<=MAX_P;i++){
-    const k=`article_text_paragraph${i}`;
+    const k = `article_text_paragraph${i}`;
     if (k in payload){
       const md = htmlToLightMd(payload[k]);
-      const items = md.split(/\n/).map(s => sentenceUnderline(s))
-        .map(s => s.trim() ? {kind:"text", line:s} : {kind:"blank"});
+      const items = md.split(/\n/)
+        .map(s=>sentenceUnderline(s))
+        .map(s=>s.trim()?{kind:"text", line:s}:{kind:"blank"});
       payload[`${k}_rich`]  = toLiteral(itemsToRunsXml(items));
       payload[`${k}_plain`] = stripInlineStars(md);
     }
@@ -260,45 +273,32 @@ function deriveArticle(payload){
       payload[`article_vocab_p${i}_line`] = words.join("   |   ");
     }
   }
-  // optional: alles zusammen
+
   const paras=[];
-  for (let i=1;i<=MAX_P;i++){ const k=`article_text_paragraph${i}`; if (payload[k]) paras.push(htmlToLightMd(payload[k])); }
+  for (let i=1;i<=MAX_P;i++){
+    const k=`article_text_paragraph${i}`;
+    if (payload[k]) paras.push(htmlToLightMd(payload[k]));
+  }
   if (paras.length){
     const lines = paras.flatMap(p=>p.split(/\n{2,}/)).flatMap(p=>p.split("\n"))
-      .map(s => sentenceUnderline(s));
-    const items = lines.map(s => s.trim() ? {kind:"text", line:s} : {kind:"blank"});
+      .map(s=>sentenceUnderline(s));
+    const items = lines.map(s=>s.trim()?{kind:"text", line:s}:{kind:"blank"});
     payload.article_text_all_rich  = toLiteral(itemsToRunsXml(items));
     payload.article_text_all_plain = stripInlineStars(paras.join("\n\n"));
   }
 }
 
 /* ---------------- Exercises ---------------- */
-function harvestWordBox(payload, base){
-  const candidates = [
-    payload[`${base}_word_box_content`],
-    payload[`${base}_word_box`],
-    payload[`${base}_wordbox`],
-    payload[`${base}_options`],
-    payload[`${base}_choices`],
-    payload[`${base}_words`],
-  ];
-  for (const c of candidates){
-    const arr = toArrayFlexible(c);
-    if (arr.length) return arr;
-  }
-  return [];
-}
-
 function deriveExercises(payload){
-  // Help: ALLE Varianten → *_pretty = "help"
-  for (const k of Object.keys(payload)) {
-    if (/^help_link_/i.test(k)) {
+  // Help-Links: alle Varianten spiegeln
+  for (const k of Object.keys(payload)){
+    if (/^help_link_/i.test(k)){
       const url = (payload[k]||"").toString().trim();
       if (!url) continue;
       payload[`${k}_pretty`] = "help";
       const m = k.match(/^(help_link_[a-z0-9]+_\d+)([ab])?$/i);
-      if (m) {
-        const base = m[1], suffix = m[2] || "";
+      if (m){
+        const base=m[1], suffix=m[2]||"";
         if (suffix) payload[`${base}_pretty`] = "help";
         else { payload[`${base}a_pretty`] = "help"; payload[`${base}b_pretty`] = "help"; }
       }
@@ -306,47 +306,43 @@ function deriveExercises(payload){
   }
 
   for (const k of Object.keys(payload)){
-    // Wortbox: explizit + Fallbacks
+    // Wortboxen (explizit)
     if (/_word_box_content$/i.test(k)){
-      const base = k.replace(/_word_box_content$/i, "");
+      const base = k.replace(/_word_box_content$/i,"");
       const items = toArrayFlexible(payload[k]);
       payload[`${base}_word_box_content_line`] = items.join("   |   ");
     }
 
-    // Content
+    // Inhalte
     if (/_content$/i.test(k)){
-      const isActive = /^active_/i.test(k);
-      const isIdioms = /idioms/i.test(k);
+      const isActive   = /^active_/i.test(k);
+      const isIdioms   = /idioms/i.test(k);
       const isMatching = /matching/i.test(k);
-      // Grammatik (nur für Gaps-Regel, sonst wie normal)
-      // const isGrammar = /b1_|b2_|grammar/i.test(k) && !isIdioms;
 
-      let md = htmlToLightMd(payload[k], { forActive: isActive });
-      let lines = md.split(/\n/).map(s => s.replace(/\s*\|\s*/g, "   |   ").trimEnd());
-      lines = lines.map(s => sentenceUnderline(s));
+      let md = htmlToLightMd(payload[k], { forActive:isActive });
+      let lines = md.split(/\n/).map(s=>s.replace(/\s*\|\s*/g,"   |   ").trimEnd());
+      lines = lines.map(sentenceUnderline);
 
       let items;
-      if (isIdioms) {
-        items = buildIdiomsBlocks(md); // blockweise, a) b) c) pro Frage
-        // Wortbox falls nicht separat geliefert:
-        const base = k.replace(/_content$/i, "");
-        if (!payload.hasOwnProperty(`${base}_word_box_content_line`)) {
+      if (isIdioms){
+        items = buildIdiomsBlocks(md); // pro Frage a)–d)
+        // Wortbox falls noch nicht da:
+        const base = k.replace(/_content$/i,"");
+        if (!payload.hasOwnProperty(`${base}_word_box_content_line`)){
           const wb = harvestWordBox(payload, base);
           if (wb.length) payload[`${base}_word_box_content_line`] = wb.join("   |   ");
         }
-      } else if (isMatching) {
+      } else if (isMatching){
         items = buildMatchingLines(md);
-      } else if (isActive) {
-        items = lines.map(s => s.trim() ? {kind:"text", line:s} : {kind:"blank"});
+      } else if (isActive){
+        items = lines.map(s=>s.trim()?{kind:"text", line:s}:{kind:"blank"});
       } else {
         items = enumeratePreserveBlanks(lines);
       }
 
-      const rich = toLiteral(itemsToRunsXml(items));
-      const plain = stripInlineStars(lines.join("\n"));
-
-      payload[`${k}_rich`]  = rich;
-      payload[`${k}_plain`] = plain; // falls Template kein RAW nutzt
+      // Ausgaben für beide Template-Fälle:
+      payload[`${k}_rich`]  = toLiteral(itemsToRunsXml(items));            // für RAW-Platzhalter
+      payload[`${k}_plain`] = stripInlineStars(lines.join("\n"));          // falls Template NICHT RAW nutzt
     }
   }
 }
@@ -359,14 +355,17 @@ module.exports = async (req, res) => {
 
   try {
     let payload = req.body;
-    if (typeof payload === "string"){ try{ payload=JSON.parse(payload);}catch{ payload={}; } }
+    if (typeof payload === "string"){ try{ payload=JSON.parse(payload); } catch { payload = {}; } }
     if (!payload || typeof payload !== "object") payload = {};
 
-    // Defaults & Meta
+    // Defaults & Spiegel
     if (typeof payload.midjourney_article_logo === "undefined") payload.midjourney_article_logo = "";
     if (typeof payload.teacher_cloud_logo === "undefined") payload.teacher_cloud_logo = "";
     if (payload.headline_article && !payload.headline_artikel) payload.headline_artikel = payload.headline_article;
     if (payload.headline_artikel && !payload.headline_article) payload.headline_article = payload.headline_artikel;
+
+    // Source-Label
+    if (payload.source_link) payload.source_link_pretty = hostToLabel(payload.source_link);
 
     deriveArticle(payload);
     deriveExercises(payload);
@@ -381,8 +380,8 @@ module.exports = async (req, res) => {
       errorHandler: () => ""
     });
 
-    res.setHeader("Content-Type","application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-    res.setHeader("Content-Disposition",'attachment; filename="generated.docx"');
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    res.setHeader("Content-Disposition", 'attachment; filename="generated.docx"');
     res.status(200).send(Buffer.from(docBuffer));
   } catch (err) {
     res.status(500).json({ error: err?.message || String(err) });

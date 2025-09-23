@@ -225,11 +225,11 @@ function harvestWordBox(payload, base){
 const MAX_P=16;
 
 function deriveArticle(payload){
-  // Source Link mit korrektem Hyperlink
+  // Source Link mit korrektem Hyperlink - WICHTIG: rId1 statt rId7!
   if (payload.source_link) {
     payload.source_link_pretty = hostToLabel(payload.source_link);
-    // Hyperlink für Word-Template mit rId7 (standard für externe Links)
-    payload.source_link_hyperlink_raw = `<w:hyperlink r:id="rId7"><w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr><w:t>${escText(payload.source_link_pretty)}</w:t></w:r></w:hyperlink>`;
+    // rId1 ist standard für erste externe Referenz in docx-templates
+    payload.source_link_hyperlink_raw = `<w:hyperlink r:id="rId1"><w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr><w:t>${escText(payload.source_link_pretty)}</w:t></w:r></w:hyperlink>`;
   }
 
   for (let i=1;i<=MAX_P;i++){

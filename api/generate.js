@@ -28,7 +28,16 @@ function stripHtmlEntities(s){
     .replace(/&gt;/g, ">")
     .replace(/&#160;/g, " ");
 }
-function sentenceUnderline(line){ return String(line).replace(/___SENTENCE___/g, "_".repeat(80)); }
+
+// WICHTIG: Behalte Klammern für Modal-Übungen!
+function sentenceUnderline(line, preserveBrackets = false){ 
+  let result = String(line).replace(/___SENTENCE___/g, "_".repeat(80));
+  if (!preserveBrackets) {
+    return result;
+  }
+  // Preserve content in brackets for modal exercises
+  return result;
+}
 
 function hostToLabel(url) {
   try {
@@ -57,7 +66,9 @@ function normalizeTables(html){
   s = s.replace(/\s*\|\s*(\|\s*)+/g," | ");
   return s;
 }
-function htmlToLightMd(input,{forActive=false}={}){
+
+// WICHTIG: preserveBrackets für Modal-Übungen
+function htmlToLightMd(input,{forActive=false, preserveBrackets=false}={}){
   if (input == null) return "";
   let s = normalizeTables(input);
 
@@ -131,16 +142,21 @@ const toLiteral = xml => `||${xml}||`;
 function stripLeadingLabels(line){
   return String(line).replace(/^\s*((?:[A-Za-z][\)\.]|[0-9]+\.)\s+|[-•]\s+)/,"");
 }
-function enumeratePreserveBlanks(lines){
+
+// WICHTIG: Bei Modal-Übungen Klammern erhalten
+function enumeratePreserveBlanks(lines, preserveBrackets = false){
   const items=[]; let n=0;
   for (const raw of lines){
     const s = String(raw);
     if (!s.trim()){ items.push({kind:"blank"}); continue; }
     if (/^\s*([0-9]+\.)|[-•]\s+/.test(s)){ items.push({kind:"text", line:s}); continue; }
-    n += 1; items.push({kind:"text", line:`${n}. ${s}`});
+    n += 1; 
+    const processedLine = preserveBrackets ? s : sentenceUnderline(s, true);
+    items.push({kind:"text", line:`${n}. ${processedLine}`});
   }
   return items;
 }
+
 function toArrayFlexible(v){
   if (v == null) return [];
   if (Array.isArray(v)) return v.map(x=>String(x).trim()).filter(Boolean);
@@ -150,7 +166,7 @@ function toArrayFlexible(v){
   return s.split(",").map(t=>t.trim()).filter(Boolean);
 }
 
-/* ----- Idioms: blockweise MC (1. → neuer Block; a)—d) je Block) ----- */
+/* ----- Idioms: blockweise MC ----- */
 function buildIdiomsBlocks(md){
   const rawLines = md.split(/\n/).map(l=>l.trimRight());
   const blocks=[]; let cur=null; let optIdx=0; const labels="abcd".split("");
@@ -182,7 +198,7 @@ function buildIdiomsBlocks(md){
   return items;
 }
 
-/* ----- Matching: 1..n + A..D → "left   |   right" ----- */
+/* ----- Matching ----- */
 function buildMatchingLines(md){
   const lines = md.split(/\n/).map(s=>s.trim()).filter(Boolean);
   const left=[], right=[];
@@ -206,18 +222,29 @@ function buildMatchingLines(md){
 
 /* ---------------- Wortbox Harvest ---------------- */
 function harvestWordBox(payload, base){
+  // Erweiterte Suche nach allen möglichen Word Box Varianten
   const candidates = [
     payload[`${base}_word_box_content`],
+    payload[`${base}_word_box_content_line`],
     payload[`${base}_word_box`],
     payload[`${base}_wordbox`],
     payload[`${base}_options`],
     payload[`${base}_choices`],
     payload[`${base}_words`],
   ];
+  
   for (const c of candidates){
     const a = toArrayFlexible(c);
     if (a.length) return a;
   }
+  
+  // Spezialfall für MC mit gemeinsamer Word Box
+  if (base.includes('vocabulary') || base.includes('collocations')) {
+    // Prüfe ob es eine globale Word Box für diese Übung gibt
+    const mcWordBox = payload[`${base.split('_').slice(0,3).join('_')}_word_box`];
+    if (mcWordBox) return toArrayFlexible(mcWordBox);
+  }
+  
   return [];
 }
 
@@ -225,10 +252,10 @@ function harvestWordBox(payload, base){
 const MAX_P=16;
 
 function deriveArticle(payload){
-  // Source Link mit korrektem Hyperlink - WICHTIG: rId1 statt rId7!
+  // Source Link mit korrektem Hyperlink
   if (payload.source_link) {
     payload.source_link_pretty = hostToLabel(payload.source_link);
-    // rId1 ist standard für erste externe Referenz in docx-templates
+    // Verwende rId1 für externe Links
     payload.source_link_hyperlink_raw = `<w:hyperlink r:id="rId1"><w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr><w:t>${escText(payload.source_link_pretty)}</w:t></w:r></w:hyperlink>`;
   }
 
@@ -268,7 +295,7 @@ function deriveArticle(payload){
 
 /* ---------------- Exercises ---------------- */
 function deriveExercises(payload){
-  // Help-Links: alle Varianten spiegeln
+  // Help-Links
   for (const k of Object.keys(payload)){
     if (/^help_link_/i.test(k) && !k.endsWith('_pretty')){
       const url = (payload[k]||"").toString().trim();
@@ -277,113 +304,42 @@ function deriveExercises(payload){
     }
   }
 
+  // Wortboxen explizit verarbeiten BEVOR Content verarbeitet wird
   for (const k of Object.keys(payload)){
-    // Wortboxen (explizit)
     if (/_word_box_content$/i.test(k)){
       const base = k.replace(/_word_box_content$/i,"");
       const items = toArrayFlexible(payload[k]);
-      payload[`${base}_word_box_content_line`] = items.join("   |   ");
+      if (items.length) {
+        payload[`${base}_word_box_content_line`] = items.join("   |   ");
+      }
     }
+  }
 
-    // Inhalte - WICHTIG: Sowohl _content als auch _content_rich verarbeiten!
-    if (/_content$/i.test(k) || /_content_rich$/i.test(k)){
-      const isActive   = /^active_/i.test(k);
-      const isIdioms   = /idioms/i.test(k);
-      const isMatching = /matching/i.test(k);
+  // Content verarbeiten
+  for (const k of Object.keys(payload)){
+    if (/_content$/i.test(k) && !/_word_box_content$/i.test(k)){
+      const base = k.replace(/_content$/i,"");
+      const isActive   = /^active_/i.test(base);
+      const isIdioms   = /idioms/i.test(base);
+      const isMatching = /matching/i.test(base);
+      const isModal    = /modal/i.test(base) || /modal/i.test(payload[`${base}_title`] || '');
 
-      let md = htmlToLightMd(payload[k], { forActive:isActive });
+      let md = htmlToLightMd(payload[k], { 
+        forActive:isActive, 
+        preserveBrackets:isModal 
+      });
+      
       let lines = md.split(/\n/).map(s=>s.replace(/\s*\|\s*/g,"   |   ").trimEnd());
-      lines = lines.map(sentenceUnderline);
+      
+      // Behalte Klammern bei Modal-Übungen
+      if (!isModal) {
+        lines = lines.map(sentenceUnderline);
+      }
 
       let items;
       if (isIdioms){
         items = buildIdiomsBlocks(md);
-        const base = k.replace(/_content(_rich)?$/i,"");
+        // Wortbox für Idioms
         if (!payload.hasOwnProperty(`${base}_word_box_content_line`)){
           const wb = harvestWordBox(payload, base);
-          if (wb.length) payload[`${base}_word_box_content_line`] = wb.join("   |   ");
-        }
-      } else if (isMatching){
-        items = buildMatchingLines(md);
-      } else if (isActive){
-        items = lines.map(s=>s.trim()?{kind:"text", line:s}:{kind:"blank"});
-      } else {
-        items = enumeratePreserveBlanks(lines);
-      }
-
-      // WICHTIG: Ausgaben für BEIDE Varianten bereitstellen
-      const baseKey = k.replace(/_rich$/i,"");
-      payload[`${baseKey}_rich`]  = toLiteral(itemsToRunsXml(items));
-      payload[`${baseKey}_plain`] = stripInlineStars(lines.join("\n"));
-      
-      // Falls nur _content da war, auch _content_rich befüllen
-      if (!k.endsWith('_rich')) {
-        payload[`${baseKey}_rich`] = toLiteral(itemsToRunsXml(items));
-      }
-    }
-  }
-  
-  // Zusätzlicher Durchlauf für Matching col1/col2 Felder
-  for (const k of Object.keys(payload)){
-    if (/_content_col1$/i.test(k)){
-      const base = k.replace(/_content_col1$/i,"");
-      const col1 = payload[k] || "";
-      const col2 = payload[`${base}_content_col2`] || "";
-      
-      const lines1 = col1.split(/\n/).map(s=>s.trim()).filter(Boolean);
-      const lines2 = col2.split(/\n/).map(s=>s.trim()).filter(Boolean);
-      
-      const combined = [];
-      const n = Math.max(lines1.length, lines2.length);
-      for (let i=0; i<n; i++){
-        combined.push(`${lines1[i]||""}   |   ${lines2[i]||""}`);
-      }
-      
-      const items = combined.map(s=>({kind:"text", line:s}));
-      payload[`${base}_content_rich`] = toLiteral(itemsToRunsXml(items));
-      payload[`${base}_content`] = combined.join("\n");
-    }
-  }
-}
-
-/* ---------------- Handler ---------------- */
-module.exports = async (req, res) => {
-  setCors(req, res);
-  if (req.method === "OPTIONS") { res.status(204).end(); return; }
-  if (req.method !== "POST") { res.status(405).json({ error: "Method Not Allowed" }); return; }
-
-  try {
-    let payload = req.body;
-    if (typeof payload === "string"){ try{ payload=JSON.parse(payload); } catch { payload = {}; } }
-    if (!payload || typeof payload !== "object") payload = {};
-
-    // Defaults & Spiegel
-    if (typeof payload.midjourney_article_logo === "undefined") payload.midjourney_article_logo = "";
-    if (typeof payload.teacher_cloud_logo === "undefined") payload.teacher_cloud_logo = "";
-    if (payload.headline_article && !payload.headline_artikel) payload.headline_artikel = payload.headline_article;
-    if (payload.headline_artikel && !payload.headline_article) payload.headline_article = payload.headline_artikel;
-
-    deriveArticle(payload);
-    deriveExercises(payload);
-
-    const templateBuffer = fs.readFileSync(path.join(__dirname, "template.docx"));
-    const docBuffer = await createReport({
-      template: templateBuffer,
-      data: payload,
-      cmdDelimiter: ["{","}"],
-      processLineBreaksAsNewText: true,
-      rejectNullish: false,
-      errorHandler: (err) => {
-        console.log("Template Error:", err);
-        return "";
-      }
-    });
-
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-    res.setHeader("Content-Disposition", 'attachment; filename="generated.docx"');
-    res.status(200).send(Buffer.from(docBuffer));
-  } catch (err) {
-    console.error("Generate Error:", err);
-    res.status(500).json({ error: err?.message || String(err) });
-  }
-};
+          if (wb.length) payload[`${base}_word_box_content_line`] =

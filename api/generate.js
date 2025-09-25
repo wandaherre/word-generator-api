@@ -196,6 +196,7 @@ module.exports = async (req, res) => {
       cmdDelimiter: ["{", "}"],
       processLineBreaksAsNewText: true,
       rejectNullish: false,
+      fixSmartQuotes: true,
       errorHandler: (err) => {
         console.log("Template Error:", err);
         return "";

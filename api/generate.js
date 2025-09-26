@@ -221,12 +221,12 @@ module.exports = async (req, res) => {
     // DOCX generieren
     const docBuffer = await createReport({
       template: templateBuffer,
-      data: payload,
+      data: (query) => payload[query] || '', // Wrapper to return '' for missing keys
       cmdDelimiter: ["{", "}"],
-      processLineBreaksAsNewText: false, // Temporär deaktiviert zum Testen
+      processLineBreaksAsNewText: false,
       rejectNullish: false,
       fixSmartQuotes: true,
-      failFast: true,
+      failFast: false,
       additionalJsContext: {
         LINK: (obj) => {
           if (!obj) return { text: '', hyperlink: '' };

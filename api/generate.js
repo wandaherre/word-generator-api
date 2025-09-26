@@ -196,11 +196,18 @@ module.exports = async (req, res) => {
     // 4) *_content ⇒ *_content_rich (außer Abitur)
     ensureContentRich(payload);
 
-    // 5) 2-Spalten/Pipes → Tabs
-    normalizeTwoColumnsAndTabs(payload);
+// 5) 2-Spalten/Pipes → Tabs
+normalizeTwoColumnsAndTabs(payload);
 
-    // Template laden
-    const templateBuffer = fs.readFileSync(path.join(__dirname, "template.docx"));
+// Clean undefined values to prevent split errors
+Object.keys(payload).forEach(key => {
+  if (payload[key] === undefined) {
+    payload[key] = '';
+  }
+});
+
+// Template laden
+const templateBuffer = fs.readFileSync(path.join(__dirname, "template.docx"));
 
     // DOCX generieren
     const docBuffer = await createReport({

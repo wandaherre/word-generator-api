@@ -176,6 +176,8 @@ module.exports = async (req, res) => {
     }
     if (!payload || typeof payload !== "object") payload = {};
 
+    console.log('Received payload:', JSON.stringify(payload, null, 2)); // Debug logging
+
     // Headline Alias (harmlos)
     if (payload.headline_article && !payload.headline_artikel) payload.headline_artikel = payload.headline_article;
     if (payload.headline_artikel && !payload.headline_article) payload.headline_article = payload.headline_artikel;
@@ -208,8 +210,13 @@ module.exports = async (req, res) => {
       processLineBreaksAsNewText: true,
       rejectNullish: false,
       fixSmartQuotes: true,
-      errorHandler: (err) => {
-        console.log("Template Error:", err);
+      additionalJsContext: {
+        LINK: (obj) => {
+          return { text: obj.label || obj.url, hyperlink: obj.url };
+        }
+      },
+      errorHandler: (err, cmd) => {
+        console.error("Template Error at command:", cmd, "Error:", err);
         return "";
       },
     });

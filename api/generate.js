@@ -196,18 +196,18 @@ module.exports = async (req, res) => {
     // 4) *_content ⇒ *_content_rich (außer Abitur)
     ensureContentRich(payload);
 
-// 5) 2-Spalten/Pipes → Tabs
-normalizeTwoColumnsAndTabs(payload);
+    // 5) 2-Spalten/Pipes → Tabs
+    normalizeTwoColumnsAndTabs(payload);
 
-// Clean undefined values to prevent split errors
-Object.keys(payload).forEach(key => {
-  if (payload[key] === undefined) {
-    payload[key] = '';
-  }
-});
+    // Clean undefined and null values to prevent split errors
+    Object.keys(payload).forEach(key => {
+      if (payload[key] == null) {
+        payload[key] = '';
+      }
+    });
 
-// Template laden
-const templateBuffer = fs.readFileSync(path.join(__dirname, "template.docx"));
+    // Template laden
+    const templateBuffer = fs.readFileSync(path.join(__dirname, "template.docx"));
 
     // DOCX generieren
     const docBuffer = await createReport({
@@ -215,8 +215,9 @@ const templateBuffer = fs.readFileSync(path.join(__dirname, "template.docx"));
       data: payload,
       cmdDelimiter: ["{", "}"],
       processLineBreaksAsNewText: true,
-      rejectNullish: false,
+      rejectNullish: true,
       fixSmartQuotes: true,
+      failFast: false,
       additionalJsContext: {
         LINK: (obj) => {
           return { text: obj.label || obj.url, hyperlink: obj.url };

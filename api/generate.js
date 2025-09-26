@@ -199,12 +199,21 @@ module.exports = async (req, res) => {
     // 5) 2-Spalten/Pipes → Tabs
     normalizeTwoColumnsAndTabs(payload);
 
+    // Log nullish keys for debug
+    const nullishKeys = Object.keys(payload).filter(key => payload[key] == null);
+    if (nullishKeys.length > 0) {
+      console.log('Nullish keys before clean:', nullishKeys);
+    }
+
     // Clean undefined and null values to prevent split errors
     Object.keys(payload).forEach(key => {
       if (payload[key] == null) {
         payload[key] = '';
       }
     });
+
+    // Log after clean
+    console.log('Payload after clean:', JSON.stringify(payload, null, 2));
 
     // Template laden
     const templateBuffer = fs.readFileSync(path.join(__dirname, "template.docx"));
@@ -214,17 +223,21 @@ module.exports = async (req, res) => {
       template: templateBuffer,
       data: payload,
       cmdDelimiter: ["{", "}"],
-      processLineBreaksAsNewText: true,
-      rejectNullish: true,
+      processLineBreaksAsNewText: false, // Temporär deaktiviert zum Testen
+      rejectNullish: false,
       fixSmartQuotes: true,
-      failFast: false,
+      failFast: true,
       additionalJsContext: {
         LINK: (obj) => {
-          return { text: obj.label || obj.url, hyperlink: obj.url };
+          if (!obj) return { text: '', hyperlink: '' };
+          return { text: obj.label || obj.url || '', hyperlink: obj.url || '' };
+        },
+        HTML: (html) => {
+          return html || '';
         }
       },
       errorHandler: (err, cmd) => {
-        console.error("Template Error at command:", cmd, "Error:", err);
+        console.error("Template Error at command:", cmd, "Error:", err.stack || err);
         return "";
       },
     });
@@ -233,7 +246,7 @@ module.exports = async (req, res) => {
     res.setHeader("Content-Disposition", 'attachment; filename="generated.docx"');
     res.status(200).send(Buffer.from(docBuffer));
   } catch (err) {
-    console.error("Generate Error:", err);
+    console.error("Generate Error:", err.stack || err);
     res.status(500).json({ error: err?.message || String(err) });
   }
 };

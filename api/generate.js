@@ -3,6 +3,17 @@ const fs = require("fs");
 const path = require("path");
 const createReport = require("docx-templates").default;
 
+// --- Versions-Check einfügen ---
+try {
+  const pkg = require('docx-templates/package.json');
+  console.log('[docx-templates] version at runtime:', pkg.version);
+} catch (e) {
+  console.log('[docx-templates] version unknown:', e?.message || e);
+}
+// --------------------------------
+
+// deine bisherigen Helper-Funktionen hier...
+
 /* ---------------- CORS: stabil & permissiv ---------------- */
 function setCors(req, res) {
   const origin = req.headers.origin || "*";

@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
 // ---- feste Node-Runtime auf Vercel erzwingen (nicht Edge) ----
-export const config = { runtime: "nodejs18.x" };
+export const config = { runtime: "nodejs" };
 
 // ---- lib-Version für Debug ermitteln ----
 const require = createRequire(import.meta.url);

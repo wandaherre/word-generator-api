@@ -1,17 +1,10 @@
-// Vercel Serverless Function: POST /api/mj/generate
-// Zweck: Task bei Kie.ai anlegen und taskId zurückgeben
-
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 function withCORS(req: VercelRequest, res: VercelResponse) {
-  // Für erste Tests: offen. In Produktion: Origin gezielt setzen.
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Origin', '*'); // ggf. eng fassen
   res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return true;
-  }
+  if (req.method === 'OPTIONS') { res.status(200).end(); return true; }
   return false;
 }
 
@@ -26,9 +19,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
     const {
       prompt,
-      version = '7',          // '7' | '6.1' | ...
-      aspectRatio = '16:9',   // '1:1' | '3:4' | '16:9' ...
-      speed = 'relaxed',      // 'relaxed' | 'fast' | 'turbo'
+      version = '7',
+      aspectRatio = '16:9',
+      speed = 'relaxed',
       webhook = false,
     } = body;
 
@@ -46,8 +39,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       version,
       aspectRatio,
       speed,
+      ...(callBackUrl ? { callBackUrl } : {})
     };
-    if (callBackUrl) payload.callBackUrl = callBackUrl;
 
     const upstream = await fetch('https://api.kie.ai/api/v1/mj/generate', {
       method: 'POST',
@@ -58,15 +51,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       body: JSON.stringify(payload),
     });
 
-    const data = await upstream.json().catch(() => ({}));
+    const raw = await upstream.text(); // <-- rohen Text sichern
+    // in Logs sehen wir *genau*, was Kie.ai zurückgibt:
+    console.log('[KIEAI][GENERATE] status=%s body=%s', upstream.status, raw);
+
+    let data: any = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch { /* invalid JSON? */ }
+
     if (!upstream.ok) {
-      // Fehler vom Upstream möglichst transparent durchreichen
-      return res.status(upstream.status).json(data || { error: `Upstream ${upstream.status}` });
+      // Fehler *unverfälscht* an den Client weitergeben
+      return res.status(upstream.status).json(data || { error: `Upstream ${upstream.status}`, raw });
     }
 
     // Erwartet: { code:200, data:{ taskId:"..." }, ... }
     return res.status(200).json(data);
   } catch (err: any) {
+    console.error('[KIEAI][GENERATE][ERROR]', err);
     return res.status(500).json({ error: err?.message || 'Internal error' });
   }
 }

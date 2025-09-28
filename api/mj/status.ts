@@ -1,3 +1,8 @@
+// /api/mj/status.ts
+// Zweck: Status eines Tasks abfragen (successFlag, resultUrls)
+// Methode: GET
+// Query: ?taskId=...
+
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 function withCORS(req: VercelRequest, res: VercelResponse) {
@@ -37,6 +42,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(upstream.status).json(data || { error: `Upstream ${upstream.status}`, raw });
     }
 
+    // { code:200, data:{ successFlag: boolean, resultInfoJson:{ resultUrls: string[] } } }
     return res.status(200).json(data);
   } catch (err: any) {
     console.error('[KIEAI][STATUS][ERROR]', err);

@@ -1,7 +1,12 @@
+// /api/mj/generate.ts
+// Zweck: Kie.ai-Task anlegen und taskId zurückgeben
+// Methode: POST
+// Body: { prompt: string, version?: string, aspectRatio?: string, speed?: string, webhook?: boolean, enableTranslation?: boolean }
+
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 function withCORS(req: VercelRequest, res: VercelResponse) {
-  res.setHeader('Access-Control-Allow-Origin', '*'); // ggf. eng fassen
+  res.setHeader('Access-Control-Allow-Origin', '*'); // bei Bedarf Origin einschränken
   res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') { res.status(200).end(); return true; }
@@ -21,8 +26,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       prompt,
       version = '7',
       aspectRatio = '16:9',
-      speed = 'relaxed',
+      speed = 'fast',            // für Tests schneller
       webhook = false,
+      enableTranslation = true,  // WICHTIG: deutschsprachige Prompts automatisch übersetzen
     } = body;
 
     if (!prompt || typeof prompt !== 'string') {
@@ -39,6 +45,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       version,
       aspectRatio,
       speed,
+      enableTranslation,
       ...(callBackUrl ? { callBackUrl } : {})
     };
 
@@ -51,19 +58,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       body: JSON.stringify(payload),
     });
 
-    const raw = await upstream.text(); // <-- rohen Text sichern
-    // in Logs sehen wir *genau*, was Kie.ai zurückgibt:
+    const raw = await upstream.text();
     console.log('[KIEAI][GENERATE] status=%s body=%s', upstream.status, raw);
 
     let data: any = {};
-    try { data = raw ? JSON.parse(raw) : {}; } catch { /* invalid JSON? */ }
+    try { data = raw ? JSON.parse(raw) : {}; } catch {}
 
     if (!upstream.ok) {
-      // Fehler *unverfälscht* an den Client weitergeben
       return res.status(upstream.status).json(data || { error: `Upstream ${upstream.status}`, raw });
     }
 
-    // Erwartet: { code:200, data:{ taskId:"..." }, ... }
+    // Erwartet: { code:200, data:{ taskId:"..." } }
     return res.status(200).json(data);
   } catch (err: any) {
     console.error('[KIEAI][GENERATE][ERROR]', err);

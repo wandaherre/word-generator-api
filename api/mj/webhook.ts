@@ -1,6 +1,7 @@
-// Vercel Serverless Function: POST /api/mj/webhook
-// Zweck: Kie.ai-Callback empfangen (data.resultUrls[]), weiterverarbeiten (Storage/DB)
-// Hinweis: Kie.ai publiziert keine festen Callback-IPs → nutze Secret-Header zur Verifikation.
+// /api/mj/webhook.ts
+// Zweck: Kie.ai-Callback empfangen (data.resultUrls[])
+// Methode: POST
+// Sicherheit: optionales eigenes Secret im Header "X-Webhook-Secret"
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
@@ -8,10 +9,7 @@ function withCORS(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Webhook-Secret');
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return true;
-  }
+  if (req.method === 'OPTIONS') { res.status(200).end(); return true; }
   return false;
 }
 
@@ -20,7 +18,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    // Optional: eigenes Secret prüfen
     const expected = process.env.KIE_WEBHOOK_SECRET;
     const got = (req.headers['x-webhook-secret'] || req.headers['X-Webhook-Secret']) as string | undefined;
     if (expected && got !== expected) {
@@ -28,15 +25,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const payload = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
-    // Erwarteter Body (vereinfachtes Schema):
-    // { code, msg, data: { taskId, promptJson, resultUrls: string[] } }
-    const urls = payload?.data?.resultUrls || [];
+    // Erwartet: { code, msg, data: { taskId, promptJson, resultUrls: string[] } }
+    const urls: string[] = payload?.data?.resultUrls || [];
+    console.log('[KIEAI][WEBHOOK] taskId=%s urls=%d', payload?.data?.taskId, urls.length);
 
-    // TODO: Hier Bild-URLs in deinen Storage/DB übernehmen
-    // z.B. fetch(urls[0]) -> in S3/R2 hochladen; oder in DB referenzieren.
-
-    return res.status(200).json({ ok: true, received: { taskId: payload?.data?.taskId, urlsCount: urls.length } });
+    // TODO: URLs in DB/Storage übernehmen (optional)
+    return res.status(200).json({ ok: true, received: { taskId: payload?.data?.taskId, urls } });
   } catch (err: any) {
+    console.error('[KIEAI][WEBHOOK][ERROR]', err);
     return res.status(500).json({ error: err?.message || 'Webhook error' });
   }
 }

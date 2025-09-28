@@ -1,16 +1,10 @@
-// Vercel Serverless Function: GET /api/mj/status?taskId=...
-// Zweck: Task-Status abfragen und (falls fertig) resultUrls liefern
-
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 function withCORS(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return true;
-  }
+  if (req.method === 'OPTIONS') { res.status(200).end(); return true; }
   return false;
 }
 
@@ -33,15 +27,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       headers: { 'Authorization': `Bearer ${API_KEY}` },
     });
 
-    const data = await upstream.json().catch(() => ({}));
+    const raw = await upstream.text();
+    console.log('[KIEAI][STATUS] taskId=%s status=%s body=%s', taskId, upstream.status, raw);
+
+    let data: any = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch {}
+
     if (!upstream.ok) {
-      return res.status(upstream.status).json(data || { error: `Upstream ${upstream.status}` });
+      return res.status(upstream.status).json(data || { error: `Upstream ${upstream.status}`, raw });
     }
 
-    // Erwartet u. a.:
-    // { code:200, data:{ successFlag: boolean, resultInfoJson:{ resultUrls: string[] } } }
     return res.status(200).json(data);
   } catch (err: any) {
+    console.error('[KIEAI][STATUS][ERROR]', err);
     return res.status(500).json({ error: err?.message || 'Internal error' });
   }
 }
